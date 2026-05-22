@@ -1,0 +1,252 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function isAdmin() {
+      return signedIn() && userDoc().data.role == "admin";
+    }
+
+    function isModerator() {
+      return signedIn() && userDoc().data.role in ["admin", "moderator"];
+    }
+
+    function owns(userId) {
+      return signedIn() && request.auth.uid == userId;
+    }
+
+    function validRatingBase() {
+      return request.resource.data.overall >= 1 &&
+        request.resource.data.overall <= 5 &&
+        request.resource.data.get("service", 0) >= 1 &&
+        request.resource.data.get("service", 0) <= 5 &&
+        request.resource.data.get("trust", 0) >= 1 &&
+        request.resource.data.get("trust", 0) <= 5 &&
+        request.resource.data.cleanliness >= 1 &&
+        request.resource.data.cleanliness <= 5 &&
+        request.resource.data.speed >= 1 &&
+        request.resource.data.speed <= 5 &&
+        request.resource.data.fairness >= 1 &&
+        request.resource.data.fairness <= 5 &&
+        request.resource.data.would_recommend in [true, false] &&
+        request.resource.data.would_return in [true, false];
+    }
+
+    function validGpsRating() {
+      return request.resource.data.gps_verified == true && request.resource.data.gps_accuracy_meters <= 100 && request.resource.data.distance_meters >= 0;
+    }
+
+    match /users/{userId} {
+      allow read: if owns(userId) || isModerator();
+      allow create: if owns(userId)
+        && request.resource.data.keys().hasOnly([
+          "id",
+          "auth_provider",
+          "email",
+          "display_name",
+          "avatar_url",
+          "role",
+          "trust_score",
+          "created_at",
+          "updated_at"
+        ])
+        && request.resource.data.id == request.auth.uid
+        && request.resource.data.auth_provider == "google"
+        && request.resource.data.role == "user"
+        && request.resource.data.trust_score == 50;
+      allow update: if (owns(userId)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "email",
+          "display_name",
+          "avatar_url",
+          "updated_at"
+        ])
+        && request.resource.data.role == resource.data.role
+        && request.resource.data.trust_score == resource.data.trust_score)
+        || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    match /entities/{entityId} {
+      allow read: if resource.data.status == "active" || isModerator();
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly([
+          "id",
+          "name",
+          "slug",
+          "type",
+          "description",
+          "ai_description",
+          "address",
+          "city",
+          "country",
+          "lat",
+          "lng",
+          "geohash",
+          "created_by",
+          "claimed_by",
+          "claim_status",
+          "status",
+          "average_score",
+          "weighted_score",
+          "total_ratings",
+          "recommend_percent",
+          "return_percent",
+          "trust_index",
+          "created_at",
+          "updated_at"
+        ])
+        && request.resource.data.id == entityId
+        && request.resource.data.created_by == request.auth.uid
+        && request.resource.data.status == "active"
+        && request.resource.data.country == "Albania"
+        && request.resource.data.claim_status == "unclaimed"
+        && request.resource.data.average_score == 0
+        && request.resource.data.weighted_score == 0
+        && request.resource.data.total_ratings == 0
+        && request.resource.data.recommend_percent == 0
+        && request.resource.data.return_percent == 0
+        && request.resource.data.trust_index == 50
+        && request.resource.data.lat >= -90
+        && request.resource.data.lat <= 90
+        && request.resource.data.lng >= -180
+        && request.resource.data.lng <= 180
+        && request.resource.data.geohash.size() > 0;
+      allow update: if isModerator()
+        || (signedIn()
+          && resource.data.created_by == request.auth.uid
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            "name",
+            "description",
+            "ai_description",
+            "address",
+            "city",
+            "lat",
+            "lng",
+            "geohash",
+            "updated_at"
+          ]));
+      allow delete: if isAdmin();
+    }
+
+    match /ratings/{ratingId} {
+      allow read: if resource.data.status == "approved" || isModerator();
+      allow create: if signedIn()
+        && request.resource.data.keys().hasOnly([
+          "id",
+          "entity_id",
+          "user_id",
+          "device_id",
+          "overall",
+          "service",
+          "trust",
+          "cleanliness",
+          "speed",
+          "fairness",
+          "would_recommend",
+          "would_return",
+          "comment",
+          "gps_verified",
+          "gps_lat",
+          "gps_lng",
+          "gps_accuracy_meters",
+          "distance_meters",
+          "weight",
+          "fraud_score",
+          "status",
+          "created_at",
+          "updated_at"
+        ])
+        && ratingId == request.resource.data.entity_id + "_" + request.auth.uid
+        && request.resource.data.id == ratingId
+        && request.resource.data.user_id == request.auth.uid
+        && request.resource.data.device_id.size() > 10
+        && validRatingBase()
+        && validGpsRating()
+        && request.resource.data.weight == 0
+        && request.resource.data.fraud_score >= 0
+        && request.resource.data.fraud_score <= 100
+        && request.resource.data.status == "pending";
+      allow update: if (owns(resource.data.user_id)
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          "overall",
+          "service",
+          "trust",
+          "cleanliness",
+          "speed",
+          "fairness",
+          "would_recommend",
+          "would_return",
+          "comment",
+          "gps_verified",
+          "gps_lat",
+          "gps_lng",
+          "gps_accuracy_meters",
+          "distance_meters",
+          "fraud_score",
+          "status",
+          "updated_at"
+        ])
+        && request.resource.data.user_id == resource.data.user_id
+        && request.resource.data.entity_id == resource.data.entity_id
+        && request.resource.data.device_id == resource.data.device_id
+        && request.resource.data.weight == resource.data.weight
+        && request.resource.data.status == "pending"
+        && validRatingBase()
+        && validGpsRating())
+        || isModerator();
+      allow delete: if isModerator();
+    }
+
+    match /deviceEntityRatings/{deviceRatingId} {
+      allow read: if isModerator();
+      allow create, update: if signedIn()
+        && request.resource.data.keys().hasOnly([
+          "entity_id",
+          "user_id",
+          "device_id",
+          "updated_at"
+        ])
+        && request.resource.data.user_id == request.auth.uid
+        && request.resource.data.device_id.size() > 10;
+      allow delete: if isAdmin();
+    }
+
+    match /entityClaims/{claimId} {
+      allow read: if isModerator()
+        || (signedIn() && resource.data.user_id == request.auth.uid);
+      allow create: if signedIn()
+        && request.resource.data.user_id == request.auth.uid
+        && request.resource.data.status == "pending";
+      allow update, delete: if isModerator();
+    }
+
+    match /reviewReports/{reportId} {
+      allow create: if signedIn()
+        && request.resource.data.reporter_user_id == request.auth.uid;
+      allow read, update, delete: if isModerator();
+    }
+
+    match /entityEdits/{editId} {
+      allow create: if signedIn()
+        && request.resource.data.user_id == request.auth.uid;
+      allow read, update, delete: if isModerator();
+    }
+
+    match /auditLogs/{logId} {
+      allow read, write: if isAdmin();
+    }
+
+    match /entityDailyStats/{statId} {
+      allow read: if true;
+      allow write: if isModerator();
+    }
+  }
+}
